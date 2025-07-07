@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { WebglPlot, WebglLine, ColorRGBA } from 'webgl-plot'
+import { WebglPlot, WebglLine, WebglSquare, ColorRGBA } from 'webgl-plot'
 
 interface XYChartProps {
   xData: Float32Array
@@ -14,6 +14,7 @@ interface XYChartProps {
   width?: number
   height?: number
   plotType?: 'scatter' | 'line'
+  pointSize?: number
   className?: string
 }
 
@@ -27,8 +28,8 @@ export default function XYChart({
   color = new ColorRGBA(0.2, 0.5, 0.8, 1),
   width = 800,
   height = 600,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   plotType = 'line',
+  pointSize = 3,
   className = ''
 }: XYChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -95,21 +96,41 @@ export default function XYChart({
       const rangeX = maxX - minX || 1
       const rangeY = maxY - minY || 1
 
-      // Create line
-      const line = new WebglLine(color, sampledXData.length)
-      
-      // Set X and Y values (normalized between -1 and 1)
-      for (let i = 0; i < sampledXData.length; i++) {
-        const normalizedX = ((sampledXData[i] - minX) / rangeX) * 2 - 1
-        const normalizedY = ((sampledYData[i] - minY) / rangeY) * 2 - 1
-        line.setX(i, normalizedX)
-        line.setY(i, normalizedY)
+      if (plotType === 'scatter') {
+        // Create scatter plot using squares
+        const normalizedPointSize = pointSize / Math.min(width, height) * 2 // Normalize point size
+        
+        for (let i = 0; i < sampledXData.length; i++) {
+          const normalizedX = ((sampledXData[i] - minX) / rangeX) * 2 - 1
+          const normalizedY = ((sampledYData[i] - minY) / rangeY) * 2 - 1
+          
+          const square = new WebglSquare(color)
+          // Create a square centered at the data point
+          square.setSquare(
+            normalizedX - normalizedPointSize / 2,
+            normalizedY - normalizedPointSize / 2,
+            normalizedX + normalizedPointSize / 2,
+            normalizedY + normalizedPointSize / 2
+          )
+          plot.addSurface(square)
+        }
+      } else {
+        // Create line plot
+        const line = new WebglLine(color, sampledXData.length)
+        
+        // Set X and Y values (normalized between -1 and 1)
+        for (let i = 0; i < sampledXData.length; i++) {
+          const normalizedX = ((sampledXData[i] - minX) / rangeX) * 2 - 1
+          const normalizedY = ((sampledYData[i] - minY) / rangeY) * 2 - 1
+          line.setX(i, normalizedX)
+          line.setY(i, normalizedY)
+        }
+
+        // Add line to plot
+        plot.addLine(line)
       }
 
-      // Add line to plot
-      plot.addLine(line)
-
-      console.log(`XYChart initialized: X range [${minX}, ${maxX}], Y range [${minY}, ${maxY}]`)
+      console.log(`XYChart initialized (${plotType}): X range [${minX}, ${maxX}], Y range [${minY}, ${maxY}]`)
 
       // Start animation loop
       const animate = () => {
@@ -139,7 +160,7 @@ export default function XYChart({
         plotRef.current = null
       }
     }
-  }, [xData, yData, color, width, height])
+  }, [xData, yData, color, width, height, plotType, pointSize])
 
   // Get axis data for labels
   const getAxisLabels = () => {

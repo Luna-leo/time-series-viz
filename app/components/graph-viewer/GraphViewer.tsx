@@ -28,6 +28,8 @@ export default function GraphViewer() {
   const [selectedParameters, setSelectedParameters] = useState<string[]>([])
   const [xAxisParam, setXAxisParam] = useState<string | null>(null)
   const [yAxisParam, setYAxisParam] = useState<string | null>(null)
+  const [xyPlotType, setXyPlotType] = useState<'line' | 'scatter'>('line')
+  const [pointSize, setPointSize] = useState(3)
   const [dataStats, setDataStats] = useState({
     totalPoints: 0,
     startDate: null as Date | null,
@@ -328,6 +330,53 @@ export default function GraphViewer() {
                 </div>
               )}
 
+              {/* XY Plot Type Selection */}
+              {graphMode === 'xy' && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <span className="font-semibold">表示タイプ:</span>
+                      <button
+                        onClick={() => setXyPlotType('line')}
+                        className={`px-3 py-1 rounded ${
+                          xyPlotType === 'line' 
+                            ? 'bg-blue-500 text-white' 
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        線グラフ
+                      </button>
+                      <button
+                        onClick={() => setXyPlotType('scatter')}
+                        className={`px-3 py-1 rounded ${
+                          xyPlotType === 'scatter' 
+                            ? 'bg-blue-500 text-white' 
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        散布図
+                      </button>
+                    </div>
+                    
+                    {/* Point Size Slider for Scatter Plot */}
+                    {xyPlotType === 'scatter' && (
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm text-gray-600">ポイントサイズ:</span>
+                        <input
+                          type="range"
+                          min="1"
+                          max="10"
+                          value={pointSize}
+                          onChange={(e) => setPointSize(Number(e.target.value))}
+                          className="w-24"
+                        />
+                        <span className="text-sm font-mono bg-gray-100 px-2 py-1 rounded">{pointSize}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Chart Display */}
               <div className="bg-white rounded-lg shadow p-6">
                 {graphMode === 'xy' && xyChartData ? (
@@ -342,6 +391,8 @@ export default function GraphViewer() {
                       color={datasetColor}
                       width={Math.min(containerWidth, 1000)}
                       height={600}
+                      plotType={xyPlotType}
+                      pointSize={pointSize}
                     />
                   </div>
                 ) : graphMode === 'timeseries' && timeSeriesChartData ? (
