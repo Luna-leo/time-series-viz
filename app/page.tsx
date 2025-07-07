@@ -1,7 +1,50 @@
+'use client';
+
+import { useState } from 'react';
+import CsvImporter from './components/csv-importer/CsvImporter';
+import DataViewer from './components/data-viewer/DataViewer';
+
 export default function Home() {
+  const [activeTab, setActiveTab] = useState<'import' | 'view'>('import');
+
   return (
-    <main className="min-h-screen p-8">
-      <h1 className="text-2xl font-bold">Time Series Visualization</h1>
+    <main className="min-h-screen bg-gray-100">
+      <div className="container mx-auto px-4 py-8">
+        <h1 className="text-3xl font-bold text-gray-900 mb-8">Time Series Visualization</h1>
+        
+        <div className="mb-6">
+          <nav className="flex space-x-4">
+            <button
+              onClick={() => setActiveTab('import')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                activeTab === 'import'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-white text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              CSVインポート
+            </button>
+            <button
+              onClick={() => setActiveTab('view')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                activeTab === 'view'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-white text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              データ一覧
+            </button>
+          </nav>
+        </div>
+        
+        <div>
+          {activeTab === 'import' ? (
+            <CsvImporter />
+          ) : (
+            <DataViewer />
+          )}
+        </div>
+      </div>
     </main>
   );
 }
