@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import CsvImporter from './components/csv-importer/CsvImporter';
 import DataViewer from './components/data-viewer/DataViewer';
+import GraphViewer from './components/graph-viewer/GraphViewer';
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'import' | 'view'>('import');
+  const [activeTab, setActiveTab] = useState<'import' | 'view' | 'graph'>('import');
 
   return (
     <main className="min-h-screen bg-gray-100">
@@ -34,14 +35,26 @@ export default function Home() {
             >
               データ一覧
             </button>
+            <button
+              onClick={() => setActiveTab('graph')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                activeTab === 'graph'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-white text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              グラフ
+            </button>
           </nav>
         </div>
         
         <div>
           {activeTab === 'import' ? (
             <CsvImporter />
-          ) : (
+          ) : activeTab === 'view' ? (
             <DataViewer />
+          ) : (
+            <GraphViewer />
           )}
         </div>
       </div>
