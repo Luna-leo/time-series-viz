@@ -8,6 +8,8 @@ import TimeSeriesChart from '../charts/TimeSeriesChart'
 import ChartGrid from '../charts/ChartGrid'
 import { ChartSynchronizer } from '../charts/ChartSynchronizer'
 import DatasetSelector from './DatasetSelector'
+import { format } from 'date-fns'
+import { ja } from 'date-fns/locale'
 
 // Extended parameter with dataset info
 interface ExtendedParameter extends Parameter {
@@ -25,12 +27,14 @@ export default function GraphViewer() {
   const [loading, setLoading] = useState(true)
   const [dataLoading, setDataLoading] = useState(false)
   const [viewMode, setViewMode] = useState<'single' | 'grid'>('single')
+  const [timeMode, setTimeMode] = useState<'absolute' | 'relative'>('absolute')
   const [selectedParameters, setSelectedParameters] = useState<string[]>([])
   const [mergedDataStats, setMergedDataStats] = useState({
     totalPoints: 0,
     startDate: null as Date | null,
     endDate: null as Date | null
   })
+  const [datasetStartTimes, setDatasetStartTimes] = useState<Map<number, number>>(new Map())
 
   // Generate dataset colors
   const datasetColors = useMemo(() => {
@@ -96,6 +100,7 @@ export default function GraphViewer() {
         // Store data and parameters by dataset
         const newDatasetsData = new Map<number, TimeSeriesData[]>()
         const newDatasetsParameters = new Map<number, Parameter[]>()
+        const newDatasetStartTimes = new Map<number, number>()
         let totalPoints = 0
         let allDates: Date[] = []
         
@@ -104,17 +109,27 @@ export default function GraphViewer() {
           newDatasetsParameters.set(datasetId, params)
           totalPoints += data.length
           allDates = allDates.concat(data.map(d => d.timestamp))
+          
+          // Track each dataset's start time
+          if (data.length > 0) {
+            const startTime = Math.min(...data.map(d => d.timestamp.getTime()))
+            newDatasetStartTimes.set(datasetId, startTime)
+          }
         })
         
         setDatasetsData(newDatasetsData)
         setDatasetsParameters(newDatasetsParameters)
+        setDatasetStartTimes(newDatasetStartTimes)
         
         // Calculate merged stats
         if (allDates.length > 0) {
+          const minTime = Math.min(...allDates.map(d => d.getTime()))
+          const maxTime = Math.max(...allDates.map(d => d.getTime()))
+          
           setMergedDataStats({
             totalPoints,
-            startDate: new Date(Math.min(...allDates.map(d => d.getTime()))),
-            endDate: new Date(Math.max(...allDates.map(d => d.getTime())))
+            startDate: new Date(minTime),
+            endDate: new Date(maxTime)
           })
         }
         
@@ -162,26 +177,48 @@ export default function GraphViewer() {
   const chartData = useMemo(() => {
     if (datasetsData.size === 0 || selectedParameters.length === 0) return null
 
-    // Collect all timestamps from all datasets
-    const allTimestamps = new Set<number>()
-    datasetsData.forEach(data => {
-      data.forEach(d => {
-        allTimestamps.add(d.timestamp.getTime())
-      })
-    })
-    
-    // Sort timestamps
-    const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b)
-    const timestamps = new Float32Array(sortedTimestamps.length)
-    sortedTimestamps.forEach((ts, i) => {
-      timestamps[i] = ts / 1000 // Convert to seconds
-    })
+    let timestamps: Float32Array
+    let timestampIndexMap: Map<number, number> | null = null
 
-    // Create timestamp index map for fast lookup
-    const timestampIndexMap = new Map<number, number>()
-    sortedTimestamps.forEach((ts, index) => {
-      timestampIndexMap.set(ts, index)
-    })
+    if (timeMode === 'relative') {
+      // For relative time, each dataset starts at 0
+      // Find the maximum duration across all datasets
+      let maxDuration = 0
+      datasetsData.forEach((data, datasetId) => {
+        if (data.length > 0) {
+          const startTime = datasetStartTimes.get(datasetId) || 0
+          const endTime = Math.max(...data.map(d => d.timestamp.getTime()))
+          const duration = (endTime - startTime) / 1000 // in seconds
+          maxDuration = Math.max(maxDuration, duration)
+        }
+      })
+      
+      // Create a unified timestamp array from 0 to maxDuration
+      const numPoints = Math.min(Math.ceil(maxDuration * 10), 10000) // Sample at 0.1s intervals, max 10k points
+      timestamps = new Float32Array(numPoints)
+      for (let i = 0; i < numPoints; i++) {
+        timestamps[i] = (i / (numPoints - 1)) * maxDuration
+      }
+    } else {
+      // Absolute time mode (original logic)
+      const allTimestamps = new Set<number>()
+      datasetsData.forEach(data => {
+        data.forEach(d => {
+          allTimestamps.add(d.timestamp.getTime())
+        })
+      })
+      
+      const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b)
+      timestamps = new Float32Array(sortedTimestamps.length)
+      sortedTimestamps.forEach((ts, i) => {
+        timestamps[i] = ts / 1000 // Convert to seconds
+      })
+      
+      timestampIndexMap = new Map<number, number>()
+      sortedTimestamps.forEach((ts, index) => {
+        timestampIndexMap!.set(ts, index)
+      })
+    }
 
     // Prepare data for each selected parameter
     interface ChartDataItem {
@@ -206,39 +243,86 @@ export default function GraphViewer() {
       const datasetData = datasetsData.get(datasetId)
       if (!datasetData) return
 
-      // Create data array with interpolation for missing points
-      const data = new Float32Array(sortedTimestamps.length)
+      const data = new Float32Array(timestamps.length)
       
-      // Fill with NaN initially
-      for (let i = 0; i < data.length; i++) {
-        data[i] = NaN
-      }
-      
-      // Fill with actual data
-      datasetData.forEach(d => {
-        const value = d.parameters[parameterId]
-        if (value !== undefined && !isNaN(value)) {
-          const index = timestampIndexMap.get(d.timestamp.getTime())
-          if (index !== undefined) {
-            data[index] = value
+      if (timeMode === 'relative') {
+        // For relative time, normalize each dataset's timestamps individually
+        const startTime = datasetStartTimes.get(datasetId) || 0
+        
+        // Fill with NaN initially
+        for (let i = 0; i < data.length; i++) {
+          data[i] = NaN
+        }
+        
+        // Map dataset data to the unified timestamp array
+        datasetData.forEach(d => {
+          const relativeTime = (d.timestamp.getTime() - startTime) / 1000 // seconds from dataset start
+          const value = d.parameters[parameterId]
+          
+          if (value !== undefined && !isNaN(value)) {
+            // Find the closest timestamp index
+            let closestIndex = 0
+            let minDiff = Math.abs(timestamps[0] - relativeTime)
+            
+            for (let i = 1; i < timestamps.length; i++) {
+              const diff = Math.abs(timestamps[i] - relativeTime)
+              if (diff < minDiff) {
+                minDiff = diff
+                closestIndex = i
+              } else {
+                break // timestamps are sorted, so we can break early
+              }
+            }
+            
+            data[closestIndex] = value
+          }
+        })
+        
+        // Linear interpolation for missing values
+        let lastValidIndex = -1
+        for (let i = 0; i < data.length; i++) {
+          if (!isNaN(data[i])) {
+            if (lastValidIndex !== -1 && i - lastValidIndex > 1) {
+              const startValue = data[lastValidIndex]
+              const endValue = data[i]
+              const steps = i - lastValidIndex
+              for (let j = 1; j < steps; j++) {
+                data[lastValidIndex + j] = startValue + (endValue - startValue) * (j / steps)
+              }
+            }
+            lastValidIndex = i
           }
         }
-      })
-      
-      // Simple linear interpolation for missing values
-      let lastValidIndex = -1
-      for (let i = 0; i < data.length; i++) {
-        if (!isNaN(data[i])) {
-          if (lastValidIndex !== -1 && i - lastValidIndex > 1) {
-            // Interpolate between lastValidIndex and i
-            const startValue = data[lastValidIndex]
-            const endValue = data[i]
-            const steps = i - lastValidIndex
-            for (let j = 1; j < steps; j++) {
-              data[lastValidIndex + j] = startValue + (endValue - startValue) * (j / steps)
+      } else {
+        // Absolute time mode (original logic)
+        for (let i = 0; i < data.length; i++) {
+          data[i] = NaN
+        }
+        
+        datasetData.forEach(d => {
+          const value = d.parameters[parameterId]
+          if (value !== undefined && !isNaN(value) && timestampIndexMap) {
+            const index = timestampIndexMap.get(d.timestamp.getTime())
+            if (index !== undefined) {
+              data[index] = value
             }
           }
-          lastValidIndex = i
+        })
+        
+        // Linear interpolation
+        let lastValidIndex = -1
+        for (let i = 0; i < data.length; i++) {
+          if (!isNaN(data[i])) {
+            if (lastValidIndex !== -1 && i - lastValidIndex > 1) {
+              const startValue = data[lastValidIndex]
+              const endValue = data[i]
+              const steps = i - lastValidIndex
+              for (let j = 1; j < steps; j++) {
+                data[lastValidIndex + j] = startValue + (endValue - startValue) * (j / steps)
+              }
+            }
+            lastValidIndex = i
+          }
         }
       }
 
@@ -263,7 +347,7 @@ export default function GraphViewer() {
     })
 
     return { timestamps, charts: chartsData }
-  }, [datasetsData, selectedParameters, allParameters])
+  }, [datasetsData, selectedParameters, allParameters, timeMode, datasetStartTimes])
 
   if (loading) {
     return (
@@ -321,6 +405,11 @@ export default function GraphViewer() {
                                 }}
                               />
                               {dataset.plant} - {dataset.machine_no}
+                              {timeMode === 'relative' && datasetStartTimes.has(datasetId) && (
+                                <span className="text-xs text-gray-500">
+                                  (開始: {format(new Date(datasetStartTimes.get(datasetId)!), 'HH:mm:ss', { locale: ja })})
+                                </span>
+                              )}
                             </h4>
                             <div className="flex flex-wrap gap-2 ml-5">
                               {params.map((param) => {
@@ -351,29 +440,69 @@ export default function GraphViewer() {
                   </div>
                 </div>
                 
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setViewMode('single')}
-                    className={`px-3 py-1 rounded ${
-                      viewMode === 'single' 
-                        ? 'bg-blue-500 text-white' 
-                        : 'bg-gray-200 text-gray-700'
-                    }`}
-                  >
-                    単一表示
-                  </button>
-                  <button
-                    onClick={() => setViewMode('grid')}
-                    className={`px-3 py-1 rounded ${
-                      viewMode === 'grid' 
-                        ? 'bg-blue-500 text-white' 
-                        : 'bg-gray-200 text-gray-700'
-                    }`}
-                  >
-                    グリッド表示
-                  </button>
+                <div className="flex flex-col gap-2 items-end">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setTimeMode('absolute')}
+                      className={`px-3 py-1 rounded ${
+                        timeMode === 'absolute' 
+                          ? 'bg-green-500 text-white' 
+                          : 'bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      絶対時間
+                    </button>
+                    <button
+                      onClick={() => setTimeMode('relative')}
+                      className={`px-3 py-1 rounded ${
+                        timeMode === 'relative' 
+                          ? 'bg-green-500 text-white' 
+                          : 'bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      相対時間
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setViewMode('single')}
+                      className={`px-3 py-1 rounded ${
+                        viewMode === 'single' 
+                          ? 'bg-blue-500 text-white' 
+                          : 'bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      単一表示
+                    </button>
+                    <button
+                      onClick={() => setViewMode('grid')}
+                      className={`px-3 py-1 rounded ${
+                        viewMode === 'grid' 
+                          ? 'bg-blue-500 text-white' 
+                          : 'bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      グリッド表示
+                    </button>
+                  </div>
                 </div>
               </div>
+
+              {/* Reference time display for relative mode */}
+              {timeMode === 'relative' && datasetStartTimes.size > 0 && (
+                <div className="mb-2 text-sm text-gray-600">
+                  <div className="font-medium">各データセットの開始時刻:</div>
+                  {Array.from(datasetStartTimes.entries()).map(([datasetId, startTime]) => {
+                    const dataset = datasets.find(d => d.id === datasetId)
+                    if (!dataset) return null
+                    return (
+                      <div key={datasetId} className="ml-4">
+                        {dataset.plant} - {dataset.machine_no}: {format(new Date(startTime), 'yyyy/MM/dd HH:mm:ss', { locale: ja })}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
 
               {/* Chart Display */}
               {chartData ? (
@@ -390,6 +519,7 @@ export default function GraphViewer() {
                         timestamps={chartData.timestamps}
                         width={Math.min(containerWidth, 1000)}
                         height={500}
+                        timeMode={timeMode}
                       />
                     ) : (
                       <ChartGrid
@@ -398,6 +528,7 @@ export default function GraphViewer() {
                         rows={2}
                         cols={2}
                         synchronized={true}
+                        timeMode={timeMode}
                       />
                     )}
                   </ChartSynchronizer>

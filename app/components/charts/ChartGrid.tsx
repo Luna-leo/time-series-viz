@@ -21,6 +21,7 @@ interface ChartGridProps {
   chartHeight?: number
   synchronized?: boolean
   className?: string
+  timeMode?: 'absolute' | 'relative'
 }
 
 export default function ChartGrid({
@@ -31,7 +32,8 @@ export default function ChartGrid({
   chartWidth = 400,
   chartHeight = 300,
   synchronized = false,
-  className = ''
+  className = '',
+  timeMode = 'absolute'
 }: ChartGridProps) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_selectedRange, setSelectedRange] = useState<[number, number] | null>(null)
@@ -108,6 +110,7 @@ export default function ChartGrid({
                 width={chartWidth}
                 height={chartHeight}
                 onRangeChange={handleRangeChange}
+                timeMode={timeMode}
               />
             ) : (
               <div

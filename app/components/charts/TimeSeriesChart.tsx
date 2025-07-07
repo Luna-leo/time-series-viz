@@ -2,6 +2,9 @@
 
 import { useEffect, useRef } from 'react'
 import { WebglPlot, WebglLine, ColorRGBA } from 'webgl-plot'
+import { formatElapsedTime, generateTimeAxisLabels } from '@/app/lib/utils/time'
+import { format } from 'date-fns'
+import { ja } from 'date-fns/locale'
 
 interface ChartSeries {
   data: Float32Array
@@ -17,6 +20,7 @@ interface TimeSeriesChartProps {
   height?: number
   className?: string
   onRangeChange?: (start: number, end: number) => void
+  timeMode?: 'absolute' | 'relative'
 }
 
 export default function TimeSeriesChart({
@@ -24,7 +28,8 @@ export default function TimeSeriesChart({
   timestamps,
   width = 800,
   height = 400,
-  className = ''
+  className = '',
+  timeMode = 'absolute'
 }: TimeSeriesChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const plotRef = useRef<WebglPlot | null>(null)
@@ -141,6 +146,23 @@ export default function TimeSeriesChart({
     }
   }, [series, timestamps, width, height])
 
+  // Generate time axis labels
+  const timeAxisLabels = timestamps.length > 0 
+    ? generateTimeAxisLabels(timestamps[0], timestamps[timestamps.length - 1], 5)
+    : []
+
+  // Format time label based on mode
+  const formatTimeLabel = (seconds: number) => {
+    if (timeMode === 'relative') {
+      return formatElapsedTime(seconds)
+    } else {
+      // For absolute time, we might need to consider the start time
+      // but for now, we assume the timestamps are already absolute
+      const date = new Date(seconds * 1000)
+      return format(date, 'HH:mm:ss', { locale: ja })
+    }
+  }
+
   return (
     <div className={`relative ${className}`}>
       <canvas
@@ -160,6 +182,12 @@ export default function TimeSeriesChart({
             <span>{s.label}</span>
             {s.unit && <span className="text-gray-500">({s.unit})</span>}
           </div>
+        ))}
+      </div>
+      {/* Time axis labels */}
+      <div className="flex justify-between mt-1 px-1 text-xs text-gray-600">
+        {timeAxisLabels.map((label, index) => (
+          <span key={index}>{formatTimeLabel(label.value)}</span>
         ))}
       </div>
     </div>
