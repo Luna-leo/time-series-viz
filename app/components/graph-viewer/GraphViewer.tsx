@@ -9,21 +9,39 @@ import ChartGrid from '../charts/ChartGrid'
 import { ChartSynchronizer } from '../charts/ChartSynchronizer'
 import DatasetSelector from './DatasetSelector'
 
+// Extended parameter with dataset info
+interface ExtendedParameter extends Parameter {
+  datasetId: number
+  datasetName: string
+  datasetColor: ColorRGBA
+}
+
 export default function GraphViewer() {
   const [containerWidth, setContainerWidth] = useState(1000)
   const [datasets, setDatasets] = useState<DataSet[]>([])
-  const [selectedDatasetId, setSelectedDatasetId] = useState<number | null>(null)
-  const [allData, setAllData] = useState<TimeSeriesData[]>([])
-  const [parameters, setParameters] = useState<Parameter[]>([])
+  const [selectedDatasetIds, setSelectedDatasetIds] = useState<number[]>([])
+  const [datasetsData, setDatasetsData] = useState<Map<number, TimeSeriesData[]>>(new Map())
+  const [datasetsParameters, setDatasetsParameters] = useState<Map<number, Parameter[]>>(new Map())
   const [loading, setLoading] = useState(true)
   const [dataLoading, setDataLoading] = useState(false)
   const [viewMode, setViewMode] = useState<'single' | 'grid'>('single')
   const [selectedParameters, setSelectedParameters] = useState<string[]>([])
-  const [dataStats, setDataStats] = useState({
+  const [mergedDataStats, setMergedDataStats] = useState({
     totalPoints: 0,
     startDate: null as Date | null,
     endDate: null as Date | null
   })
+
+  // Generate dataset colors
+  const datasetColors = useMemo(() => {
+    const colors = new Map<number, ColorRGBA>()
+    datasets.forEach((dataset, index) => {
+      const hue = (index * 137.5) % 360 // Golden angle for good color distribution
+      const rgb = hslToRgb(hue / 360, 0.6, 0.5)
+      colors.set(dataset.id!, new ColorRGBA(rgb[0], rgb[1], rgb[2], 1))
+    })
+    return colors
+  }, [datasets])
 
   // Set container width on mount
   useEffect(() => {
@@ -51,11 +69,12 @@ export default function GraphViewer() {
     loadDatasets()
   }, [])
 
-  // Load data when dataset is selected
+  // Load data when datasets are selected
   useEffect(() => {
-    if (!selectedDatasetId) {
-      setAllData([])
-      setParameters([])
+    if (selectedDatasetIds.length === 0) {
+      setDatasetsData(new Map())
+      setDatasetsParameters(new Map())
+      setSelectedParameters([])
       return
     }
 
@@ -63,26 +82,51 @@ export default function GraphViewer() {
       try {
         setDataLoading(true)
         
-        // Load parameters
-        const params = await getParameters(selectedDatasetId)
-        setParameters(params)
+        // Load data for all selected datasets in parallel
+        const dataPromises = selectedDatasetIds.map(async (datasetId) => {
+          const [params, data] = await Promise.all([
+            getParameters(datasetId),
+            getTimeSeriesData(datasetId)
+          ])
+          return { datasetId, params, data }
+        })
         
-        // Load time series data
-        const data = await getTimeSeriesData(selectedDatasetId)
-        setAllData(data)
+        const results = await Promise.all(dataPromises)
         
-        // Calculate stats
-        if (data.length > 0) {
-          const dates = data.map(d => d.timestamp)
-          setDataStats({
-            totalPoints: data.length,
-            startDate: new Date(Math.min(...dates.map(d => d.getTime()))),
-            endDate: new Date(Math.max(...dates.map(d => d.getTime())))
+        // Store data and parameters by dataset
+        const newDatasetsData = new Map<number, TimeSeriesData[]>()
+        const newDatasetsParameters = new Map<number, Parameter[]>()
+        let totalPoints = 0
+        let allDates: Date[] = []
+        
+        results.forEach(({ datasetId, params, data }) => {
+          newDatasetsData.set(datasetId, data)
+          newDatasetsParameters.set(datasetId, params)
+          totalPoints += data.length
+          allDates = allDates.concat(data.map(d => d.timestamp))
+        })
+        
+        setDatasetsData(newDatasetsData)
+        setDatasetsParameters(newDatasetsParameters)
+        
+        // Calculate merged stats
+        if (allDates.length > 0) {
+          setMergedDataStats({
+            totalPoints,
+            startDate: new Date(Math.min(...allDates.map(d => d.getTime()))),
+            endDate: new Date(Math.max(...allDates.map(d => d.getTime())))
           })
         }
         
-        // Select first 4 parameters by default
-        setSelectedParameters(params.slice(0, 4).map(p => p.parameter_id))
+        // Select first 2 parameters from each dataset by default
+        const defaultSelected: string[] = []
+        results.forEach(({ datasetId, params }) => {
+          params.slice(0, 2).forEach(p => {
+            defaultSelected.push(`${datasetId}_${p.parameter_id}`)
+          })
+        })
+        setSelectedParameters(defaultSelected)
+        
       } catch (error) {
         console.error('Failed to load data:', error)
       } finally {
@@ -91,22 +135,55 @@ export default function GraphViewer() {
     }
     
     loadData()
-  }, [selectedDatasetId])
+  }, [selectedDatasetIds])
+
+  // Get all parameters with dataset info
+  const allParameters = useMemo(() => {
+    const params: ExtendedParameter[] = []
+    datasetsParameters.forEach((parameters, datasetId) => {
+      const dataset = datasets.find(d => d.id === datasetId)
+      if (!dataset) return
+      
+      const color = datasetColors.get(datasetId) || new ColorRGBA(0.5, 0.5, 0.5, 1)
+      
+      parameters.forEach(param => {
+        params.push({
+          ...param,
+          datasetId,
+          datasetName: `${dataset.plant} - ${dataset.machine_no}`,
+          datasetColor: color
+        })
+      })
+    })
+    return params
+  }, [datasetsParameters, datasets, datasetColors])
 
   // Prepare chart data
   const chartData = useMemo(() => {
-    if (!allData.length || !selectedParameters.length) return null
+    if (datasetsData.size === 0 || selectedParameters.length === 0) return null
 
-    // Convert timestamps to Float32Array
-    const timestamps = new Float32Array(allData.length)
-    allData.forEach((d, i) => {
-      timestamps[i] = d.timestamp.getTime() / 1000 // Convert to seconds
+    // Collect all timestamps from all datasets
+    const allTimestamps = new Set<number>()
+    datasetsData.forEach(data => {
+      data.forEach(d => {
+        allTimestamps.add(d.timestamp.getTime())
+      })
+    })
+    
+    // Sort timestamps
+    const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b)
+    const timestamps = new Float32Array(sortedTimestamps.length)
+    sortedTimestamps.forEach((ts, i) => {
+      timestamps[i] = ts / 1000 // Convert to seconds
     })
 
-    // Generate colors for parameters
-    const colors = generateColors(parameters.length)
+    // Create timestamp index map for fast lookup
+    const timestampIndexMap = new Map<number, number>()
+    sortedTimestamps.forEach((ts, index) => {
+      timestampIndexMap.set(ts, index)
+    })
 
-    // Prepare data for each parameter
+    // Prepare data for each selected parameter
     interface ChartDataItem {
       parameterId: string
       parameterName: string
@@ -117,26 +194,76 @@ export default function GraphViewer() {
     
     const chartsData: ChartDataItem[] = []
     
-    selectedParameters.forEach((paramId) => {
-      const param = parameters.find(p => p.parameter_id === paramId)
+    selectedParameters.forEach((paramKey) => {
+      const [datasetIdStr, parameterId] = paramKey.split('_')
+      const datasetId = parseInt(datasetIdStr)
+      
+      const param = allParameters.find(p => 
+        p.datasetId === datasetId && p.parameter_id === parameterId
+      )
       if (!param) return
 
-      const data = new Float32Array(allData.length)
-      allData.forEach((d, i) => {
-        data[i] = d.parameters[paramId] || 0
-      })
+      const datasetData = datasetsData.get(datasetId)
+      if (!datasetData) return
 
+      // Create data array with interpolation for missing points
+      const data = new Float32Array(sortedTimestamps.length)
+      
+      // Fill with NaN initially
+      for (let i = 0; i < data.length; i++) {
+        data[i] = NaN
+      }
+      
+      // Fill with actual data
+      datasetData.forEach(d => {
+        const value = d.parameters[parameterId]
+        if (value !== undefined && !isNaN(value)) {
+          const index = timestampIndexMap.get(d.timestamp.getTime())
+          if (index !== undefined) {
+            data[index] = value
+          }
+        }
+      })
+      
+      // Simple linear interpolation for missing values
+      let lastValidIndex = -1
+      for (let i = 0; i < data.length; i++) {
+        if (!isNaN(data[i])) {
+          if (lastValidIndex !== -1 && i - lastValidIndex > 1) {
+            // Interpolate between lastValidIndex and i
+            const startValue = data[lastValidIndex]
+            const endValue = data[i]
+            const steps = i - lastValidIndex
+            for (let j = 1; j < steps; j++) {
+              data[lastValidIndex + j] = startValue + (endValue - startValue) * (j / steps)
+            }
+          }
+          lastValidIndex = i
+        }
+      }
+
+      // Generate color with variation based on parameter
+      const baseColor = param.datasetColor
+      const paramIndex = allParameters.filter(p => p.datasetId === datasetId).indexOf(param)
+      const variation = 0.2
+      const brightness = 1 - (paramIndex * variation / 10)
+      
       chartsData.push({
-        parameterId: paramId,
-        parameterName: param.parameter_name,
+        parameterId: paramKey,
+        parameterName: `${param.datasetName} - ${param.parameter_name}`,
         unit: param.unit,
         data,
-        color: colors[parameters.findIndex(p => p.parameter_id === paramId)]
+        color: new ColorRGBA(
+          baseColor.r * brightness,
+          baseColor.g * brightness,
+          baseColor.b * brightness,
+          1
+        )
       })
     })
 
     return { timestamps, charts: chartsData }
-  }, [allData, selectedParameters, parameters])
+  }, [datasetsData, selectedParameters, allParameters])
 
   if (loading) {
     return (
@@ -161,12 +288,12 @@ export default function GraphViewer() {
       {/* Dataset Selection */}
       <DatasetSelector
         datasets={datasets}
-        selectedDatasetId={selectedDatasetId}
-        onSelectDataset={setSelectedDatasetId}
+        selectedDatasetIds={selectedDatasetIds}
+        onSelectDataset={setSelectedDatasetIds}
       />
 
       {/* Chart Display */}
-      {selectedDatasetId && (
+      {selectedDatasetIds.length > 0 && (
         <div className="bg-white rounded-lg shadow p-6">
           {dataLoading ? (
             <div className="text-center py-8">データを読み込み中...</div>
@@ -176,24 +303,51 @@ export default function GraphViewer() {
               <div className="mb-4 flex justify-between items-start">
                 <div>
                   <h3 className="text-lg font-semibold mb-2">パラメータ選択</h3>
-                  <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
-                    {parameters.map((param) => (
-                      <label key={param.parameter_id} className="flex items-center space-x-1 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={selectedParameters.includes(param.parameter_id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedParameters([...selectedParameters, param.parameter_id])
-                            } else {
-                              setSelectedParameters(selectedParameters.filter(id => id !== param.parameter_id))
-                            }
-                          }}
-                          className="rounded"
-                        />
-                        <span>{param.parameter_name}</span>
-                      </label>
-                    ))}
+                  <div className="max-h-48 overflow-y-auto border rounded p-2">
+                    {allParameters.length === 0 ? (
+                      <p className="text-gray-500 text-sm">パラメータがありません</p>
+                    ) : (
+                      Array.from(datasetsParameters.entries()).map(([datasetId, params]) => {
+                        const dataset = datasets.find(d => d.id === datasetId)
+                        if (!dataset) return null
+                        
+                        return (
+                          <div key={datasetId} className="mb-4">
+                            <h4 className="font-medium text-sm mb-1 flex items-center gap-2">
+                              <div 
+                                className="w-3 h-3 rounded"
+                                style={{
+                                  backgroundColor: `rgb(${datasetColors.get(datasetId)?.r ?? 0.5 * 255}, ${datasetColors.get(datasetId)?.g ?? 0.5 * 255}, ${datasetColors.get(datasetId)?.b ?? 0.5 * 255})`
+                                }}
+                              />
+                              {dataset.plant} - {dataset.machine_no}
+                            </h4>
+                            <div className="flex flex-wrap gap-2 ml-5">
+                              {params.map((param) => {
+                                const paramKey = `${datasetId}_${param.parameter_id}`
+                                return (
+                                  <label key={paramKey} className="flex items-center space-x-1 text-sm">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedParameters.includes(paramKey)}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedParameters([...selectedParameters, paramKey])
+                                        } else {
+                                          setSelectedParameters(selectedParameters.filter(id => id !== paramKey))
+                                        }
+                                      }}
+                                      className="rounded"
+                                    />
+                                    <span>{param.parameter_name}</span>
+                                  </label>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )
+                      })
+                    )}
                   </div>
                 </div>
                 
@@ -249,8 +403,9 @@ export default function GraphViewer() {
                   </ChartSynchronizer>
                   
                   <div className="mt-4 text-sm text-gray-500">
-                    総データ点数: {dataStats.totalPoints.toLocaleString()} | 
-                    表示中: {allData.length.toLocaleString()} 点
+                    総データ点数: {mergedDataStats.totalPoints.toLocaleString()} | 
+                    選択データセット: {selectedDatasetIds.length} | 
+                    表示パラメータ: {selectedParameters.length}
                   </div>
                 </>
               ) : (
@@ -264,20 +419,7 @@ export default function GraphViewer() {
   )
 }
 
-// Helper function to generate colors
-function generateColors(count: number): ColorRGBA[] {
-  const colors: ColorRGBA[] = []
-  const hueStep = 360 / count
-  
-  for (let i = 0; i < count; i++) {
-    const hue = i * hueStep
-    const rgb = hslToRgb(hue / 360, 0.7, 0.5)
-    colors.push(new ColorRGBA(rgb[0], rgb[1], rgb[2], 1))
-  }
-  
-  return colors
-}
-
+// Helper function to convert HSL to RGB
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   let r, g, b
 
