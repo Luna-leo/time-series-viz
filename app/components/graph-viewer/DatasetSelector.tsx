@@ -6,33 +6,28 @@ import { ja } from 'date-fns/locale'
 
 interface DatasetSelectorProps {
   datasets: DataSet[]
-  selectedDatasetIds: number[]
-  onSelectDataset: (ids: number[]) => void
+  selectedDatasetId: number | null
+  onSelectDataset: (id: number | null) => void
 }
 
 export default function DatasetSelector({
   datasets,
-  selectedDatasetIds,
+  selectedDatasetId,
   onSelectDataset
 }: DatasetSelectorProps) {
   
-  const handleToggleDataset = (datasetId: number) => {
-    if (selectedDatasetIds.includes(datasetId)) {
-      // Remove from selection
-      onSelectDataset(selectedDatasetIds.filter(id => id !== datasetId))
+  const handleSelectDataset = (datasetId: number) => {
+    if (selectedDatasetId === datasetId) {
+      // Deselect if already selected
+      onSelectDataset(null)
     } else {
-      // Add to selection
-      onSelectDataset([...selectedDatasetIds, datasetId])
+      // Select new dataset
+      onSelectDataset(datasetId)
     }
   }
 
-  const handleSelectAll = () => {
-    const allIds = datasets.map(d => d.id!).filter(id => id !== undefined)
-    onSelectDataset(allIds)
-  }
-
-  const handleClearAll = () => {
-    onSelectDataset([])
+  const handleClear = () => {
+    onSelectDataset(null)
   }
 
   return (
@@ -40,29 +35,25 @@ export default function DatasetSelector({
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-semibold">データセット選択</h2>
         <div className="flex gap-2">
-          <button
-            onClick={handleSelectAll}
-            className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-          >
-            すべて選択
-          </button>
-          <button
-            onClick={handleClearAll}
-            className="px-3 py-1 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
-          >
-            選択解除
-          </button>
-          {selectedDatasetIds.length > 0 && (
-            <span className="px-3 py-1 text-sm bg-gray-100 rounded">
-              {selectedDatasetIds.length}件選択中
-            </span>
+          {selectedDatasetId && (
+            <>
+              <button
+                onClick={handleClear}
+                className="px-3 py-1 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+              >
+                選択解除
+              </button>
+              <span className="px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded">
+                1件選択中
+              </span>
+            </>
           )}
         </div>
       </div>
       
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {datasets.map((dataset) => {
-          const isSelected = selectedDatasetIds.includes(dataset.id!)
+          const isSelected = selectedDatasetId === dataset.id
           
           return (
             <div
@@ -77,16 +68,17 @@ export default function DatasetSelector({
             >
               <div className="flex items-start gap-3">
                 <input
-                  type="checkbox"
+                  type="radio"
+                  name="dataset-selection"
                   checked={isSelected}
-                  onChange={() => handleToggleDataset(dataset.id!)}
-                  className="mt-1 rounded text-blue-600 focus:ring-blue-500"
+                  onChange={() => handleSelectDataset(dataset.id!)}
+                  className="mt-1 text-blue-600 focus:ring-blue-500"
                   onClick={(e) => e.stopPropagation()}
                 />
                 
                 <div 
                   className="flex-1"
-                  onClick={() => handleToggleDataset(dataset.id!)}
+                  onClick={() => handleSelectDataset(dataset.id!)}
                 >
                   <div className="flex justify-between items-start mb-2">
                     <h3 className="font-semibold text-lg">{dataset.plant}</h3>
